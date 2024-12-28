@@ -6,22 +6,31 @@
 //************************************************************************
 #define SS_PIN  10  // Chân SS
 #define RST_PIN 9   // Chân RST
+#define BUZZER_PIN 3 // Chân GPIO điều khiển còi
 //************************************************************************
 MFRC522 mfrc522(SS_PIN, RST_PIN); // Tạo instance MFRC522
 //************************************************************************
 const char *ssid = "HOME";
 const char *password = "0905563221";
-const char* device_token = "7428541a3a9794c1";
+const char* device_token = "6b132ce979d9aba0";
 
-String URL = "http://192.168.1.4/rfidattendance/getdata.php"; // IP server
+String URL = "http://192.168.1.4/rfidio/getdata.php"; // IP server
 String oldCardID = "";
 unsigned long previousMillis = 0;
 
 void setup() {
   Serial.begin(115200);
-  SPI.begin(4,5,6,7);            // SPI (MOSI, MISO, SCK, SS)
-  mfrc522.PCD_Init();     // Khởi tạo module RFID
-  connectToWiFi();        // Kết nối Wi-Fi
+  SPI.begin(6, 5, 4);  // SPI (sck, miso, mosi, SS)
+  connectToWiFi();
+
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("Wi-Fi connection failed! Check credentials.");
+    while (1);  // Dừng nếu không kết nối
+  }
+
+  mfrc522.PCD_Init();          // Khởi tạo module RFID
+  pinMode(BUZZER_PIN, OUTPUT); // Thiết lập chân còi là OUTPUT
+  digitalWrite(BUZZER_PIN, LOW);
 }
 
 void loop() {
@@ -43,20 +52,19 @@ void loop() {
   }
 
   String cardID = getCardID();
+  Serial.print("Card ID: ");
+  Serial.println(cardID);
   if (cardID != oldCardID) {
     oldCardID = cardID;
     sendCardID(cardID);
   }
-
-  delay(1000);
 }
 
 String getCardID() {
-  String cardID = "";
-  for (byte i = 0; i < mfrc522.uid.size; i++) {
-    cardID += mfrc522.uid.uidByte[i];
-  }
-  return cardID;
+  char cardID[20];
+  sprintf(cardID, "%02X%02X%02X%02X", mfrc522.uid.uidByte[0], mfrc522.uid.uidByte[1], 
+          mfrc522.uid.uidByte[2], mfrc522.uid.uidByte[3]);
+  return String(cardID);
 }
 
 void sendCardID(String card_uid) {
@@ -64,15 +72,37 @@ void sendCardID(String card_uid) {
     HTTPClient http;
     String getData = "?card_uid=" + card_uid + "&device_token=" + device_token;
     String link = URL + getData;
+    Serial.print("Link sent: ");
+    Serial.println(link);
+    http.begin(link);  // Bắt đầu kết nối HTTP
+    int httpCode = http.GET();  // Gửi GET request
+    String payload = http.getString();  // Nhận phản hồi từ server
 
-    http.begin(link);
-    int httpCode = http.GET();
-    String payload = http.getString();
-
+    Serial.print("HTTP Response Code: ");
     Serial.println(httpCode);
-    Serial.println(payload);
+
+    if (httpCode > 0) {
+      if (httpCode == HTTP_CODE_OK) {
+        Serial.println("Data sent successfully!");
+        Serial.println(payload);
+
+        if (payload.indexOf("Login successful") >= 0 || payload.indexOf("New card successfully registered") >= 0) {
+          Serial.println("Action successful! Triggering buzzer...");
+          digitalWrite(BUZZER_PIN, HIGH);
+          delay(500);
+          digitalWrite(BUZZER_PIN, LOW);
+        }
+      } else {
+        Serial.println("Error response: ");
+        Serial.println(payload);
+      }
+    } else {
+      Serial.println("Error on sending request.");
+    }
 
     http.end();
+  } else {
+    Serial.println("Not connected to Wi-Fi.");
   }
 }
 
